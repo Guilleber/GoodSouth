@@ -1,0 +1,117 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel InitSeeds
+#pragma kernel DrawTriangles
+#pragma kernel JumpFloodingStep
+#pragma kernel EncodeDistance
+
+// Variables
+RWStructuredBuffer<int2> Triangles;
+RWTexture2D<float4> Result;
+int StepSize;
+float2 MapSize;
+
+void DrawHLine(int x1, int x2, int y) {
+    if (x1 > x2) {
+        int temp = x1;
+        x1 = x2;
+        x2 = temp;
+    }
+
+    for (int x = x1; x <= x2; x++)
+    {
+        Result[int2(x, y)] = float4(0., 0., 0., 1.);
+    }
+}
+
+void DrawLowerTriangle(int2 v1, int2 v2, int2 v3) {
+    float invslope1 = (v2.x - v1.x) / (float)(v2.y - v1.y);
+    float invslope2 = (v3.x - v1.x) / (float)(v3.y - v1.y);
+
+    float curx1 = v1.x;
+    float curx2 = v1.x;
+
+    for (int scanlineY = v1.y; scanlineY <= v2.y; scanlineY++)
+    {
+        DrawHLine((int)curx1, (int)curx2, scanlineY);
+        curx1 += invslope1;
+        curx2 += invslope2;
+    }
+}
+
+void DrawUpperTriangle(int2 v1, int2 v2, int2 v3) {
+    float invslope1 = (v3.x - v1.x) / (float)(v3.y - v1.y);
+    float invslope2 = (v3.x - v2.x) / (float)(v3.y - v2.y);
+
+    float curx1 = v3.x;
+    float curx2 = v3.x;
+
+    for (int scanlineY = v3.y; scanlineY >= v1.y; scanlineY--)
+    {
+        DrawHLine((int)curx1, (int)curx2, scanlineY);
+        curx1 -= invslope1;
+        curx2 -= invslope2;
+    }
+}
+
+void DrawTriangle(int2 v1, int2 v2, int2 v3) {
+    if (v2.y < v1.y) { int2 temp = v1; v1 = v2; v2 = temp; }
+    if (v3.y < v1.y) { int2 temp = v1; v1 = v3; v3 = temp; }
+    if (v3.y < v2.y) { int2 temp = v3; v3 = v2; v2 = temp; }
+
+    if (v3.y == v2.y)
+    {
+        DrawLowerTriangle(v1, v2, v3);
+    }
+    else if (v2.y == v1.y)
+    {
+        DrawUpperTriangle(v1, v2, v3);
+    }
+    else
+    {
+        int2 v4 = int2((int)(v1.x + ((float)(v2.y - v1.y) / (float)(v3.y - v1.y)) * (v3.x - v1.x)), v2.y);
+        DrawLowerTriangle(v1, v2, v4);
+        DrawUpperTriangle(v2, v4, v3);
+    }
+}
+
+[numthreads(1,1,1)]
+void InitSeeds(uint3 id : SV_DispatchThreadID) {
+    Result[id.xy] = float4(id.xy / MapSize, 0., 1.);
+}
+
+[numthreads(16,1,1)]
+void DrawTriangles(uint3 id : SV_DispatchThreadID) {
+    id *= 3;
+    DrawTriangle(Triangles[id.x], Triangles[id.x + 1], Triangles[id.x + 2]);
+}
+
+[numthreads(8,8,1)]
+void JumpFloodingStep(uint3 id : SV_DispatchThreadID) {
+    float2 bestSeed = float2(0, 0);
+    float bestDist = 2.;
+
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float2 seed = Result[id.xy + int2(x, y) * StepSize].xy;
+            if (seed.x == 0 && seed.y == 0) { continue; }
+
+            float2 dxy = seed - id.xy / MapSize;
+            float dist = sqrt(dot(dxy, dxy));
+
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestSeed = seed;
+            }
+        }
+    }
+
+    Result[id.xy] = float4(bestSeed, 0., 1.);
+}
+
+[numthreads(8,8,1)]
+void EncodeDistance(uint3 id : SV_DispatchThreadID) {
+    float2 seed = Result[id.xy].xy;
+    float2 dxy = seed - id.xy / MapSize;
+    float dist = sqrt(dot(dxy, dxy));
+    Result[id.xy] = float4(dist, dist, dist, 1.);
+}
